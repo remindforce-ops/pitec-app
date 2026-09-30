@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>파이텍 기록</title>
+<meta name="theme-color" content="#ffffff">
+<meta name="robots" content="noindex, nofollow">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="파이텍 기록">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="demoBar" class="demo-bar" hidden>데모 모드 — 이 기기에만 저장됩니다. 실제 사용은 설치안내.md 를 따라 설정하세요.</div>
+
+<header class="topbar">
+  <div class="topbar-in">
+    <a class="brand" href="#/"><b>파이텍</b> 기록</a>
+    <nav class="topnav" id="topnav">
+      <a href="#/" data-nav="list">기록</a>
+      <a href="#/sites" data-nav="sites">현장</a>
+      <a href="#/admin" data-nav="admin" data-admin hidden>관리</a>
+      <a href="#/me" data-nav="me" id="meLink">내 정보</a>
+      <a href="#/new" class="btn primary" data-nav="new">+ 새 기록</a>
+    </nav>
+  </div>
+</header>
+
+<div class="layout">
+  <aside id="side"></aside>
+  <main id="main"><div class="empty">불러오는 중…</div></main>
+</div>
+
+<nav class="bottomnav" id="bottomnav">
+  <a href="#/" data-nav="list"><span class="ic">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg></span>기록</a>
+  <a href="#/sites" data-nav="sites"><span class="ic">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 21V5l8-3v19M12 8l8 3v10M3 21h18M7 8h2M7 12h2M7 16h2M15 14h2M15 18h2"/></svg></span>현장</a>
+  <a href="#/new" data-nav="new" class="new"><span class="ic">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>새 기록</a>
+  <a href="#/me" data-nav="me"><span class="ic">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg></span>내 정보</a>
+</nav>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<div id="busy" class="overlay" hidden>
+  <div class="box"><div class="spinner"></div><p id="busyMsg">처리 중…</p></div>
+</div>
+
+<div id="login" class="overlay" hidden>
+  <div class="box">
+    <div class="login-logo"><b>파이텍</b> 기록</div>
+    <p id="loginMsg" class="muted"></p>
+    <div id="gbtn" class="gbtn"></div>
+  </div>
+</div>
+
+<div id="lightbox" class="overlay" hidden>
+  <img alt="">
+  <div class="lb-actions"><a id="lbOpen" class="btn" target="_blank" rel="noopener">원본 열기</a><button class="btn" id="lbClose">닫기</button></div>
+</div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
