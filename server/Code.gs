@@ -6,7 +6,7 @@
  */
 
 // ▼ Google Cloud에서 만든 OAuth 클라이언트 ID (config.js 의 CLIENT_ID 와 같은 값)
-const CLIENT_ID = '여기에_클라이언트_ID를_붙여넣으세요.apps.googleusercontent.com';
+const CLIENT_ID = '946616118272-r8362dqila97ddvogtae425rifug1b01.apps.googleusercontent.com';
 
 const TZ = 'Asia/Seoul';
 const PHOTO_FOLDER_NAME = '파이텍 기록 사진';
