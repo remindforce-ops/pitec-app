@@ -769,7 +769,8 @@
       r = JSON.parse(JSON.stringify(S.recs[id]));
     } else {
       const n = now();
-      const t = q.get('type');
+      // 주소에 구분이 없으면 기록 목록에서 보고 있던 구분(공사·A/S·구매)으로 시작
+      const t = q.get('type') || (S.type !== '전체' ? S.type : '');
       r = norm({
         type: t === 'AS' || t === '구매' ? t : '공사', date: n.date, time: n.time, site: q.get('site') || '',
         workers: S.workers.includes(S.me.name) ? [S.me.name] : [],
