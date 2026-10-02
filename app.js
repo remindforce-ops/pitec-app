@@ -65,7 +65,25 @@
   function setMeta(d) {
     S.sites = d.sites; S.workers = d.workers; S.stats = d.stats;
     drawSideList();
+    saveCache();
   }
+
+  /* ───────── 빠른 시작: 마지막으로 본 목록을 이 기기에 보관 ───────── */
+  const CACHE_KEY = 'pt.cache.v1';
+  function saveCache() {
+    if (DEMO || !S.me) return;
+    const c = ls.get(CACHE_KEY) || {};
+    const fresh = c.email === S.me.email ? c : {};
+    fresh.email = S.me.email;
+    fresh.me = S.me;
+    fresh.meta = { sites: S.sites, workers: S.workers, stats: S.stats };
+    if (S.monthKey && S.monthKey.startsWith('recent:')) {
+      fresh.recs = S.monthIds.map((id) => S.recs[id]).filter(Boolean);
+    }
+    if (!ls.set(CACHE_KEY, fresh)) ls.del(CACHE_KEY);
+  }
+  function clearCache() { ls.del(CACHE_KEY); }
+  const onListPage = () => ['', 'list'].includes(parseHash().page);
   function forget(id) {
     delete S.recs[id];
     S.monthKey = null;
@@ -124,6 +142,7 @@
   }
   function logout() {
     ls.del(TOKEN_KEY);
+    clearCache();
     if (window.google?.accounts?.id) google.accounts.id.disableAutoSelect();
     location.hash = '#/';
     location.reload();
@@ -152,6 +171,7 @@
       if (j.code === 'AUTH' || j.code === 'DENIED') {
         ls.del(TOKEN_KEY);
         if (j.code === 'DENIED') {
+          clearCache();
           msg = `${j.email} 계정은 등록되어 있지 않습니다. 관리자에게 등록을 요청하거나 다른 계정으로 로그인하세요.`;
           window.google?.accounts?.id?.disableAutoSelect();
         } else {
@@ -335,6 +355,7 @@
     list.forEach((r) => { S.recs[r.id] = r; });
     S.monthIds = list.map((r) => r.id);
     S.monthKey = key;
+    saveCache();
   }
   function filtered() {
     const q = S.q.toLowerCase();
@@ -397,7 +418,7 @@
     const [y, m] = S.month.split('-');
     const nGs = list.filter((r) => r.type === '공사').length;
     const label = S.period === 'recent' ? `최근 30일 (${shortDate(rg.from)} ~ ${shortDate(rg.to)})` : `${+y}년 ${+m}월`;
-    const head = `<p class="sum">${label} · ${list.length}건 (공사 ${nGs} · A/S ${list.length - nGs})</p>`;
+    const head = `<p class="sum">${label} · ${list.length}건 (공사 ${nGs} · A/S ${list.length - nGs})${S.refreshing ? '<span class="updating">업데이트 중…</span>' : ''}</p>`;
     if (!list.length) {
       box.innerHTML = head + emptyHTML(S.q || S.type !== '전체' ? '조건에 맞는 기록이 없습니다.' : (S.period === 'recent' ? '최근 30일 동안의 기록이 없습니다.' : '이 달의 기록이 없습니다.'),
         '<br><a class="btn primary" href="#/new">+ 새 기록</a>');
@@ -970,22 +991,73 @@
   matchMedia('(min-width: 960px)').addEventListener('change', () => { if (['', 'list'].includes(parseHash().page)) drawList(); });
 
   /* ───────── 시작 ───────── */
+  function applyMe(me) {
+    S.me = me;
+    $$('[data-admin]').forEach((el) => { el.hidden = !S.me.admin; });
+  }
+
+  // 화면은 그대로 두고 최신 내용을 받아와 바꿔 끼운다 (기본 정보와 목록을 동시에 요청)
+  async function refreshInBackground() {
+    const rg = range();
+    const wantList = S.period === 'recent';
+    try {
+      const [d, list] = await Promise.all([
+        call('init'),
+        wantList ? call('list', { from: rg.from, to: rg.to }) : null,
+      ]);
+      if (d.me.email !== S.me.email) { S.recs = {}; S.monthIds = []; S.monthKey = null; }
+      applyMe(d.me);
+      if (list && range().key === rg.key) {
+        list.forEach((r) => { S.recs[r.id] = r; });
+        S.monthIds = list.map((r) => r.id);
+        S.monthKey = rg.key;
+      }
+      S.refreshing = false;
+      setMeta(d);
+      if (onListPage()) drawList();
+    } catch (e) {
+      S.refreshing = false;
+      if (onListPage()) drawList();
+      toast(e.message, true);
+    }
+  }
+
   async function start() {
     if (DEMO) $('#demoBar').hidden = false;
     else if (!CFG.CLIENT_ID) {
       main.innerHTML = emptyHTML('config.js 에 CLIENT_ID 가 설정되지 않았습니다.');
       return;
     }
+    const cache = DEMO ? null : ls.get(CACHE_KEY);
+    if (cache && cache.me && cache.meta) {
+      // 지난번 화면을 바로 보여주고, 뒤에서 최신 내용으로 바꾼다
+      applyMe(cache.me);
+      renderSide();
+      S.sites = cache.meta.sites; S.workers = cache.meta.workers; S.stats = cache.meta.stats;
+      drawSideList();
+      if (cache.recs && S.period === 'recent') {
+        cache.recs.forEach((r) => { S.recs[r.id] = r; });
+        S.monthIds = cache.recs.map((r) => r.id);
+        S.monthKey = range().key;
+      }
+      S.refreshing = true;
+      route();
+      refreshInBackground();
+      return;
+    }
     try {
-      const d = await call('init');
-      S.me = d.me;
+      // 처음 쓰는 기기: 기본 정보와 목록을 동시에 요청
+      const [d] = await Promise.all([
+        call('init'),
+        onListPage() ? loadMonth().catch(() => {}) : null,
+      ]);
+      applyMe(d.me);
       renderSide();
       setMeta(d);
     } catch (e) {
       main.innerHTML = emptyHTML(e.message, '<br><button class="btn" onclick="location.reload()">다시 시도</button>');
       return;
     }
-    $$('[data-admin]').forEach((el) => { el.hidden = !S.me.admin; });
     route();
   }
   start();

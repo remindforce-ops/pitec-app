@@ -272,3 +272,9 @@ main { padding: 14px 16px calc(var(--nav-h) + 28px + env(safe-area-inset-bottom,
 #lightbox { background: rgba(0, 0, 0, .92); flex-direction: column; gap: 12px; z-index: 65; }
 #lightbox img { max-width: 100%; max-height: calc(100vh - 110px); object-fit: contain; }
 .lb-actions { display: flex; gap: 8px; }
+.sum .updating { margin-left: 8px; color: var(--accent); font-weight: 600; }
+.sum .updating::before {
+  content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px;
+  border: 2px solid var(--accent-bg); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .sum .updating::before { animation: none; } }
