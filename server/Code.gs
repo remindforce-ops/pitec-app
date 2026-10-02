@@ -21,6 +21,8 @@ const TABLES = {
       ['result', '조치후상태'], ['resultMemo', '상태메모'], ['materials', '사용자재'],
       ['photosBefore', '작업전사진'], ['photosAfter', '작업후사진'], ['photos', '사진'],
       ['author', '작성자'], ['authorEmail', '작성자이메일'], ['createdAt', '작성일시'], ['updatedAt', '수정일시'],
+      // 구매용 칸 (기존 칸 뒤에 덧붙임 — 기존 기록 위치는 그대로)
+      ['vendor', '구매처'], ['items', '구매물품'], ['total', '구매금액'], ['memo', '메모'],
     ],
   },
   sites: {
@@ -30,6 +32,14 @@ const TABLES = {
   workers: {
     name: '작업자',
     cols: [['name', '이름'], ['createdBy', '등록자'], ['createdAt', '등록일시']],
+  },
+  items: {
+    name: '물품',
+    cols: [['name', '물품명'], ['unit', '단위'], ['lastPrice', '최근단가'], ['createdBy', '등록자'], ['createdAt', '등록일시']],
+  },
+  vendors: {
+    name: '구매처',
+    cols: [['name', '구매처명'], ['createdBy', '등록자'], ['createdAt', '등록일시']],
   },
   users: {
     name: '사용자',
@@ -88,6 +98,11 @@ const ACTIONS = {
   renameWorker: (p, me) => { needAdmin(me); return withLock(() => renameWorker(p.name, p.newName)); },
   deleteWorker: (p, me) => { needAdmin(me); return withLock(() => { deleteWhere('workers', 'name', p.name); return meta(); }); },
 
+  renameItem: (p, me) => { needAdmin(me); return withLock(() => renameItem(p.name, p.newName)); },
+  deleteItem: (p, me) => { needAdmin(me); return withLock(() => { deleteWhere('items', 'name', p.name); return meta(); }); },
+  renameVendor: (p, me) => { needAdmin(me); return withLock(() => renameVendor(p.name, p.newName)); },
+  deleteVendor: (p, me) => { needAdmin(me); return withLock(() => { deleteWhere('vendors', 'name', p.name); return meta(); }); },
+
   users: (p, me) => { needAdmin(me); return usersOut(); },
   saveUser: (p, me) => { needAdmin(me); return withLock(() => saveUser(p.user)); },
   deleteUser: (p, me) => { needAdmin(me); return withLock(() => { deleteWhere('users', 'email', String(p.email || '').toLowerCase()); return usersOut(); }); },
@@ -145,7 +160,8 @@ function records() {
 
 function recOut(r) {
   return {
-    id: r.id, type: r.type === 'AS' ? 'AS' : '공사', date: r.date, time: r.time, site: r.site,
+    id: r.id, type: r.type === 'AS' || r.type === '구매' ? r.type : '공사', date: r.date, time: r.time, site: r.site,
+    vendor: r.vendor || '', items: parseItems(r.items), total: Number(r.total) || 0, memo: r.memo || '',
     workers: splitList(r.workers), work: r.work, symptom: r.symptom, action: r.action,
     result: r.result, resultMemo: r.resultMemo, materials: r.materials,
     photosBefore: splitList(r.photosBefore), photosAfter: splitList(r.photosAfter), photos: splitList(r.photos),
@@ -155,15 +171,24 @@ function recOut(r) {
 
 function saveRecord(rec, siteInfo, me) {
   if (!rec) throw fail('저장할 내용이 없습니다.');
-  const type = rec.type === 'AS' ? 'AS' : '공사';
+  const type = rec.type === 'AS' || rec.type === '구매' ? rec.type : '공사';
+  const buy = type === '구매';
   const date = String(rec.date || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw fail('날짜가 올바르지 않습니다.');
-  const site = clean(rec.site);
-  if (!site) throw fail('현장명을 입력하세요.');
-  const workers = (rec.workers || []).map(cleanName).filter(Boolean);
+  const site = buy ? '' : clean(rec.site);
+  if (!buy && !site) throw fail('현장명을 입력하세요.');
+  const workers = buy ? [] : (rec.workers || []).map(cleanName).filter(Boolean);
+  const vendor = buy ? clean(rec.vendor) : '';
+  const items = buy ? cleanItems(rec.items) : [];
+  if (buy && !items.length) throw fail('물품을 하나 이상 입력하세요.');
 
-  ensureSite(site, siteInfo, me);
-  workers.forEach((w) => ensureWorker(w, me));
+  if (buy) {
+    if (vendor) ensureVendor(vendor, me);
+    items.forEach((it) => ensureItem(it, me));
+  } else {
+    ensureSite(site, siteInfo, me);
+    workers.forEach((w) => ensureWorker(w, me));
+  }
 
   const row = {
     type, date, site,
@@ -174,10 +199,14 @@ function saveRecord(rec, siteInfo, me) {
     action: type === 'AS' ? text(rec.action) : '',
     result: type === 'AS' && RESULTS.indexOf(rec.result) >= 0 ? rec.result : '',
     resultMemo: type === 'AS' ? text(rec.resultMemo) : '',
-    materials: text(rec.materials),
+    materials: buy ? '' : text(rec.materials),
     photosBefore: type === '공사' ? photoIds(rec.photosBefore) : '',
     photosAfter: type === '공사' ? photoIds(rec.photosAfter) : '',
-    photos: type === 'AS' ? photoIds(rec.photos) : '',
+    photos: type === 'AS' || buy ? photoIds(rec.photos) : '',
+    vendor,
+    items: items.length ? JSON.stringify(items) : '',
+    total: buy ? String(items.reduce((t, it) => t + it.qty * it.price, 0)) : '',
+    memo: buy ? text(rec.memo) : '',
     updatedAt: stamp(),
   };
 
@@ -216,6 +245,7 @@ function photoIds(list) {
 function meta() {
   const stats = {};
   records().forEach((r) => {
+    if (!r.site) return;
     const s = stats[r.site] || (stats[r.site] = { count: 0, last: '' });
     s.count++;
     if (r.date > s.last) s.last = r.date;
@@ -223,7 +253,10 @@ function meta() {
   const sites = readAll('sites').map((s) => ({ name: s.name, address: s.address, contact: s.contact, phone: s.phone }))
     .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
   const workers = readAll('workers').map((w) => w.name).sort((a, b) => a.localeCompare(b, 'ko'));
-  return { sites, workers, stats };
+  const items = readAll('items').map((i) => ({ name: i.name, unit: i.unit, lastPrice: Number(i.lastPrice) || 0 }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  const vendors = readAll('vendors').map((v) => v.name).sort((a, b) => a.localeCompare(b, 'ko'));
+  return { sites, workers, stats, items, vendors };
 }
 
 function ensureSite(name, info, me) {
@@ -275,6 +308,75 @@ function renameWorker(name, newName) {
   w.name = newName;
   writeRow('workers', w._row, w);
   updateColumn('records', 'workers', (v) => splitList(v).map((x) => (x === name ? newName : x)).join(', '));
+  return meta();
+}
+
+/* ───────── 구매: 물품·구매처 ───────── */
+function parseItems(v) {
+  if (!v) return [];
+  try {
+    const arr = JSON.parse(v);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function cleanItems(list) {
+  return (list || []).map((it) => ({
+    name: cleanName(it && it.name),
+    qty: Math.max(0, Number(it && it.qty) || 0) || 1,
+    unit: clean(it && it.unit).slice(0, 10),
+    price: Math.max(0, Math.round(Number(it && it.price) || 0)),
+  })).filter((it) => it.name).slice(0, 100);
+}
+
+function ensureItem(it, me) {
+  const row = readAll('items').find((x) => x.name === it.name);
+  if (row) {
+    let changed = false;
+    if (it.unit && it.unit !== row.unit) { row.unit = it.unit; changed = true; }
+    if (it.price && String(it.price) !== row.lastPrice) { row.lastPrice = String(it.price); changed = true; }
+    if (changed) writeRow('items', row._row, row);
+    return;
+  }
+  writeRow('items', 0, { name: it.name, unit: it.unit, lastPrice: it.price ? String(it.price) : '', createdBy: me.name, createdAt: stamp() });
+}
+
+function ensureVendor(name, me) {
+  if (readAll('vendors').some((v) => v.name === name)) return;
+  writeRow('vendors', 0, { name, createdBy: me.name, createdAt: stamp() });
+}
+
+function renameItem(name, newName) {
+  newName = cleanName(newName);
+  if (!newName) throw fail('새 이름을 입력하세요.');
+  const list = readAll('items');
+  const it = list.find((x) => x.name === name);
+  if (!it) throw fail('물품을 찾을 수 없습니다.');
+  if (newName !== name && list.some((x) => x.name === newName)) throw fail('같은 이름의 물품이 이미 있습니다.');
+  it.name = newName;
+  writeRow('items', it._row, it);
+  updateColumn('records', 'items', (v) => {
+    if (!v) return v;
+    const arr = parseItems(v);
+    let hit = false;
+    arr.forEach((x) => { if (x.name === name) { x.name = newName; hit = true; } });
+    return hit ? JSON.stringify(arr) : v;
+  });
+  return meta();
+}
+
+function renameVendor(name, newName) {
+  newName = clean(newName);
+  if (!newName) throw fail('새 이름을 입력하세요.');
+  const list = readAll('vendors');
+  const v = list.find((x) => x.name === name);
+  if (!v) throw fail('구매처를 찾을 수 없습니다.');
+  if (newName !== name && list.some((x) => x.name === newName)) throw fail('같은 이름의 구매처가 이미 있습니다.');
+  v.name = newName;
+  writeRow('vendors', v._row, v);
+  updateColumn('records', 'vendor', (x) => (x === name ? newName : x));
   return meta();
 }
 
@@ -359,6 +461,13 @@ function sheetOf(t) {
     sh.setFrozenRows(1);
     // 날짜·전화번호가 자동 변환되지 않도록 전부 '일반 텍스트'로
     sh.getRange(1, 1, sh.getMaxRows(), def.cols.length).setNumberFormat('@');
+  } else if (sh.getLastColumn() < def.cols.length) {
+    // 예전에 만든 시트에 새 칸이 생기면 제목만 덧붙인다 (기존 내용은 그대로)
+    const start = sh.getLastColumn() + 1;
+    const extra = def.cols.slice(start - 1);
+    if (sh.getMaxColumns() < def.cols.length) sh.insertColumnsAfter(sh.getMaxColumns(), def.cols.length - sh.getMaxColumns());
+    sh.getRange(1, start, sh.getMaxRows(), extra.length).setNumberFormat('@');
+    sh.getRange(1, start, 1, extra.length).setValues([extra.map((c) => c[1])]).setFontWeight('bold');
   }
   return sh;
 }

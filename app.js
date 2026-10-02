@@ -25,15 +25,52 @@
   const fullDate = (s) => { const [y, m, d] = s.split('-'); return `${y}.${m}.${d}`; };
   const isWide = () => matchMedia('(min-width: 960px)').matches;
   const RESULTS = ['정상', '관찰 필요', '재방문'];
-  const typeLabel = (t) => (t === 'AS' ? 'A/S' : '공사');
-  const tag = (t) => `<span class="tag ${t === 'AS' ? 'as' : 'gs'}">${typeLabel(t)}</span>`;
+  const typeLabel = (t) => (t === 'AS' ? 'A/S' : t === '구매' ? '구매' : '공사');
+  const typeClass = (t) => (t === 'AS' ? 'as' : t === '구매' ? 'bu' : 'gs');
+  const tag = (t) => `<span class="tag ${typeClass(t)}">${typeLabel(t)}</span>`;
+  const won = (n) => `${Math.round(Number(n) || 0).toLocaleString('ko-KR')}원`;
+  const num = (v) => { const n = Number(String(v ?? '').replace(/[^\d.]/g, '')); return Number.isFinite(n) ? n : 0; };
+  const itemsTotal = (items) => (items || []).reduce((t, it) => t + num(it.qty) * num(it.price), 0);
+  const recTitle = (r) => (r.type === '구매' ? (r.vendor || '구매') : r.site);
+
+  // 한글 초성 검색: 'ㅍ' → 파이프, 'ㅇㅂ' → 엘보
+  const CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ';
+  const chosung = (str) => [...String(str)].map((ch) => {
+    const c = ch.charCodeAt(0) - 0xac00;
+    return c >= 0 && c < 11172 ? CHO[Math.floor(c / 588)] : ch;
+  }).join('');
+  // 일치 정도: 0 = 첫 글자부터 일치, 1 = 중간 일치, -1 = 불일치
+  function matchRank(query, name) {
+    const q = query.trim().toLowerCase();
+    if (!q) return 0;
+    const n = String(name).toLowerCase();
+    const c = chosung(n);
+    if (n.startsWith(q) || c.startsWith(q)) return 0;
+    if (n.includes(q) || c.includes(q)) return 1;
+    return -1;
+  }
+  function searchNames(query, names, limit = 30) {
+    return names.map((n) => [n, matchRank(query, n)]).filter((x) => x[1] >= 0)
+      .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0], 'ko')).slice(0, limit).map((x) => x[0]);
+  }
   const resultTag = (r) => (r ? `<span class="tag r-${RESULTS.indexOf(r)}">${esc(r)}</span>` : '');
   const siteHref = (n) => '#/site/' + encodeURIComponent(n);
   const photoCount = (r) => r.photosBefore.length + r.photosAfter.length + r.photos.length;
   const photoUrl = (p, w = 600) => (p.startsWith('data:') ? p : `https://drive.google.com/thumbnail?id=${encodeURIComponent(p)}&sz=w${w}`);
+  const itemsLine = (r) => {
+    const it = r.items || [];
+    if (!it.length) return '';
+    return `${it[0].name}${it.length > 1 ? ` 외 ${it.length - 1}건` : ''}`;
+  };
   const summary = (r) => (r.type === 'AS'
     ? [r.symptom && '증상: ' + r.symptom, r.action && '조치: ' + r.action].filter(Boolean).join(' → ')
+    : r.type === '구매' ? [itemsLine(r), r.total ? won(r.total) : ''].filter(Boolean).join(' · ')
     : r.work) || '';
+  // 예전 형식 기록에도 구매용 칸이 있도록 채운다
+  const norm = (r) => Object.assign({
+    site: '', workers: [], vendor: '', items: [], total: 0, memo: '', work: '', symptom: '', action: '',
+    result: '', resultMemo: '', materials: '', photos: [], photosBefore: [], photosAfter: [], author: '',
+  }, r);
   const byTimeDesc = (a, b) => (b.date + b.time).localeCompare(a.date + a.time);
   const loadingHTML = '<div class="empty">불러오는 중…</div>';
   const emptyHTML = (msg, extra = '') => `<div class="empty">${esc(msg)}${extra}</div>`;
@@ -58,12 +95,13 @@
 
   /* ───────── 상태 ───────── */
   const S = {
-    me: null, sites: [], workers: [], stats: {},
+    me: null, sites: [], workers: [], stats: {}, items: [], vendors: [],
     month: now().date.slice(0, 7), period: 'recent', type: '전체', q: '',
     recs: {}, monthIds: [], monthKey: null, sideQ: '',
   };
   function setMeta(d) {
     S.sites = d.sites; S.workers = d.workers; S.stats = d.stats;
+    S.items = d.items || []; S.vendors = d.vendors || [];
     drawSideList();
     saveCache();
   }
@@ -76,7 +114,7 @@
     const fresh = c.email === S.me.email ? c : {};
     fresh.email = S.me.email;
     fresh.me = S.me;
-    fresh.meta = { sites: S.sites, workers: S.workers, stats: S.stats };
+    fresh.meta = { sites: S.sites, workers: S.workers, stats: S.stats, items: S.items, vendors: S.vendors };
     if (S.monthKey && S.monthKey.startsWith('recent:')) {
       fresh.recs = S.monthIds.map((id) => S.recs[id]).filter(Boolean);
     }
@@ -185,13 +223,14 @@
   }
 
   /* ───────── 데모 모드 (이 기기에만 저장) ───────── */
-  const DEMO_KEY = 'pt.demo.v2';
+  const DEMO_KEY = 'pt.demo.v3';
   function demoSeed() {
     const d = (off) => { const x = new Date(); x.setDate(x.getDate() - off); return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`; };
     const rec = (o) => Object.assign({
       id: Math.random().toString(36).slice(2, 10), type: '공사', time: '09:00', workers: [], work: '', symptom: '', action: '',
       result: '', resultMemo: '', materials: '', photosBefore: [], photosAfter: [], photos: [],
-      author: (o.workers && o.workers[0]) || '데모 관리자', authorEmail: 'demo@example.com', createdAt: '', updatedAt: '',
+      site: '', vendor: '', items: [], total: 0, memo: '',
+      author: o.author || (o.workers && o.workers[0]) || '데모 관리자', authorEmail: 'demo@example.com', createdAt: '', updatedAt: '',
     }, o);
     return {
       sites: [
@@ -200,12 +239,22 @@
         { name: '미래공장', address: '경기 김포시 양촌읍 10', contact: '', phone: '' },
       ],
       workers: ['김철수', '박영호', '이민수', '최지훈'],
+      items: [
+        { name: 'PVC 파이프 50A', unit: '개', lastPrice: 12000 },
+        { name: '엘보 50A', unit: '개', lastPrice: 1500 },
+        { name: '와이어 2.5SQ', unit: 'm', lastPrice: 800 },
+        { name: '절연테이프', unit: '개', lastPrice: 1000 },
+        { name: '실리콘', unit: '개', lastPrice: 4500 },
+      ],
+      vendors: ['대한배관자재', '공구마트'],
       users: [{ email: 'staff@example.com', name: '김철수', admin: false }],
       records: [
         rec({ date: d(0), time: '09:10', site: '한빛아파트 102동', workers: ['김철수', '박영호'], work: '급수 배관 교체 완료, 통수 확인', materials: 'PVC 파이프 50A 3개, 엘보 6개' }),
         rec({ type: 'AS', date: d(0), time: '16:20', site: '대성빌딩', workers: ['이민수'], symptom: '3층 화장실 천장 누수', action: '배관 연결부 교체, 실리콘 보강', result: '정상' }),
         rec({ date: d(1), time: '08:30', site: '한빛아파트 102동', workers: ['김철수'], work: '기존 배관 철거' }),
         rec({ type: 'AS', date: d(3), time: '14:00', site: '미래공장', workers: ['최지훈'], symptom: '펌프 소음', action: '베어링 점검', result: '관찰 필요', resultMemo: '다음 주 재확인' }),
+        rec({ type: '구매', date: d(0), time: '14:25', author: '김철수', vendor: '대한배관자재', items: [{ name: 'PVC 파이프 50A', qty: 3, unit: '개', price: 12000 }, { name: '엘보 50A', qty: 6, unit: '개', price: 1500 }], total: 45000, memo: '카드 결제' }),
+        rec({ type: '구매', date: d(2), time: '11:00', author: '이민수', vendor: '공구마트', items: [{ name: '와이어 2.5SQ', qty: 50, unit: 'm', price: 800 }, { name: '절연테이프', qty: 10, unit: '개', price: 1000 }], total: 50000 }),
         rec({ type: 'AS', date: d(40), time: '10:30', site: '한빛아파트 102동', workers: ['이민수'], symptom: '수압 약함', action: '감압 밸브 교체', result: '정상' }),
       ],
     };
@@ -218,15 +267,26 @@
     const meta = () => {
       const stats = {};
       db.records.forEach((r) => {
+        if (!r.site) return;
         const s = stats[r.site] || (stats[r.site] = { count: 0, last: '' });
         s.count++; if (r.date > s.last) s.last = r.date;
       });
-      return { sites: [...db.sites].sort((a, b) => ko(a.name, b.name)), workers: [...db.workers].sort(ko), stats };
+      return {
+        sites: [...db.sites].sort((a, b) => ko(a.name, b.name)), workers: [...db.workers].sort(ko), stats,
+        items: [...(db.items || [])].sort((a, b) => ko(a.name, b.name)), vendors: [...(db.vendors || [])].sort(ko),
+      };
     };
     const save = () => { if (!ls.set(DEMO_KEY, db)) throw new Error('데모 저장 공간이 가득 찼습니다. 내 정보 → 데모 초기화를 하세요.'); };
     const stamp = () => { const n = now(); return `${n.date} ${n.time}:00`; };
     const ensureSite = (name, info) => { if (!db.sites.some((s) => s.name === name)) db.sites.push({ name, address: info?.address || '', contact: info?.contact || '', phone: info?.phone || '' }); };
     const ensureWorker = (n) => { if (n && !db.workers.includes(n)) db.workers.push(n); };
+    db.items = db.items || []; db.vendors = db.vendors || [];
+    const ensureItem = (it) => {
+      const x = db.items.find((i) => i.name === it.name);
+      if (x) { if (it.unit) x.unit = it.unit; if (num(it.price)) x.lastPrice = num(it.price); }
+      else db.items.push({ name: it.name, unit: it.unit || '', lastPrice: num(it.price) });
+    };
+    const ensureVendor = (n) => { if (n && !db.vendors.includes(n)) db.vendors.push(n); };
     const users = () => ({ owner: me.email, users: db.users });
     const fail = (m) => { throw new Error(m); };
     let out;
@@ -238,10 +298,20 @@
       case 'upload': out = p.data; break;
       case 'saveRecord': {
         const r = p.record;
-        ensureSite(r.site, p.siteInfo);
-        r.workers.forEach(ensureWorker);
-        if (r.type === '공사') Object.assign(r, { symptom: '', action: '', result: '', resultMemo: '', photos: [] });
-        else Object.assign(r, { work: '', photosBefore: [], photosAfter: [] });
+        if (r.type === '구매') {
+          r.items = (r.items || []).filter((it) => it.name);
+          if (!r.items.length) fail('물품을 하나 이상 입력하세요.');
+          r.items.forEach(ensureItem);
+          ensureVendor(r.vendor);
+          r.total = itemsTotal(r.items);
+          Object.assign(r, { site: '', workers: [], work: '', symptom: '', action: '', result: '', resultMemo: '', materials: '', photosBefore: [], photosAfter: [] });
+        } else {
+          ensureSite(r.site, p.siteInfo);
+          r.workers.forEach(ensureWorker);
+          Object.assign(r, { vendor: '', items: [], total: 0, memo: '' });
+          if (r.type === '공사') Object.assign(r, { symptom: '', action: '', result: '', resultMemo: '', photos: [] });
+          else Object.assign(r, { work: '', photosBefore: [], photosAfter: [] });
+        }
         r.updatedAt = stamp();
         const i = db.records.findIndex((x) => x.id === r.id);
         if (r.id && i >= 0) db.records[i] = { ...db.records[i], ...r };
@@ -266,6 +336,18 @@
         db.records.forEach((r) => { r.workers = r.workers.map((w) => (w === p.name ? p.newName : w)); });
         save(); out = meta(); break;
       case 'deleteWorker': db.workers = db.workers.filter((w) => w !== p.name); save(); out = meta(); break;
+      case 'renameItem':
+        if (db.items.some((i) => i.name === p.newName)) fail('같은 이름의 물품이 이미 있습니다.');
+        db.items.find((i) => i.name === p.name).name = p.newName;
+        db.records.forEach((r) => (r.items || []).forEach((it) => { if (it.name === p.name) it.name = p.newName; }));
+        save(); out = meta(); break;
+      case 'deleteItem': db.items = db.items.filter((i) => i.name !== p.name); save(); out = meta(); break;
+      case 'renameVendor':
+        if (db.vendors.includes(p.newName)) fail('같은 이름의 구매처가 이미 있습니다.');
+        db.vendors = db.vendors.map((v) => (v === p.name ? p.newName : v));
+        db.records.forEach((r) => { if (r.vendor === p.name) r.vendor = p.newName; });
+        save(); out = meta(); break;
+      case 'deleteVendor': db.vendors = db.vendors.filter((v) => v !== p.name); save(); out = meta(); break;
       case 'users': out = users(); break;
       case 'saveUser': {
         const email = p.user.email.trim().toLowerCase();
@@ -351,7 +433,7 @@
   async function loadMonth() {
     const { key, from, to } = range();
     if (S.monthKey === key) return;
-    const list = await call('list', { from, to });
+    const list = (await call('list', { from, to })).map(norm);
     list.forEach((r) => { S.recs[r.id] = r; });
     S.monthIds = list.map((r) => r.id);
     S.monthKey = key;
@@ -361,7 +443,8 @@
     const q = S.q.toLowerCase();
     return S.monthIds.map((id) => S.recs[id]).filter(Boolean)
       .filter((r) => S.type === '전체' || r.type === S.type)
-      .filter((r) => !q || [r.site, r.workers.join(' '), r.work, r.symptom, r.action, r.resultMemo, r.materials, r.author]
+      .filter((r) => !q || [r.site, r.workers.join(' '), r.work, r.symptom, r.action, r.resultMemo, r.materials, r.author,
+        r.vendor, r.memo, (r.items || []).map((it) => it.name).join(' ')]
         .join(' ').toLowerCase().includes(q))
       .sort(byTimeDesc);
   }
@@ -374,9 +457,9 @@
   async function pageList() {
     main.innerHTML = `
       <div class="toolbar">
-        <input type="search" id="q" placeholder="현장명, 작업자, 내용 검색" value="${esc(S.q)}">
+        <input type="search" id="q" placeholder="현장명, 작업자, 물품, 구매처 검색" value="${esc(S.q)}">
         <div class="row">
-          <div class="seg" id="typeSeg">${['전체', '공사', 'AS'].map((t) => `<button type="button" data-t="${t}" class="${S.type === t ? 'on' : ''}">${t === 'AS' ? 'A/S' : t}</button>`).join('')}</div>
+          <div class="seg" id="typeSeg">${['전체', '공사', 'AS', '구매'].map((t) => `<button type="button" data-t="${t}" class="${S.type === t ? 'on' : ''}">${t === 'AS' ? 'A/S' : t}</button>`).join('')}</div>
           <div class="monthnav">
             <button class="btn ${S.period === 'recent' ? 'on' : ''}" id="mRecent">최근 30일</button>
             <button class="btn" id="mPrev" aria-label="이전 달">‹</button>
@@ -416,9 +499,11 @@
     if (!box || S.monthKey !== rg.key) return;
     const list = filtered();
     const [y, m] = S.month.split('-');
-    const nGs = list.filter((r) => r.type === '공사').length;
+    const cnt = (t) => list.filter((r) => r.type === t).length;
+    const buys = list.filter((r) => r.type === '구매');
+    const buyTotal = buys.reduce((t, r) => t + num(r.total), 0);
     const label = S.period === 'recent' ? `최근 30일 (${shortDate(rg.from)} ~ ${shortDate(rg.to)})` : `${+y}년 ${+m}월`;
-    const head = `<p class="sum">${label} · ${list.length}건 (공사 ${nGs} · A/S ${list.length - nGs})${S.refreshing ? '<span class="updating">업데이트 중…</span>' : ''}</p>`;
+    const head = `<p class="sum">${label} · ${list.length}건 (공사 ${cnt('공사')} · A/S ${cnt('AS')} · 구매 ${buys.length})${buys.length ? ` · 구매 합계 <b>${won(buyTotal)}</b>` : ''}${S.refreshing ? '<span class="updating">업데이트 중…</span>' : ''}</p>`;
     if (!list.length) {
       box.innerHTML = head + emptyHTML(S.q || S.type !== '전체' ? '조건에 맞는 기록이 없습니다.' : (S.period === 'recent' ? '최근 30일 동안의 기록이 없습니다.' : '이 달의 기록이 없습니다.'),
         '<br><a class="btn primary" href="#/new">+ 새 기록</a>');
@@ -426,12 +511,12 @@
     }
     if (isWide()) {
       box.innerHTML = head + `<div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>날짜</th><th>시간</th><th>구분</th><th>현장</th><th>내용</th><th>작업자</th><th>작성자</th><th>사진</th></tr></thead>
+        <thead><tr><th>날짜</th><th>시간</th><th>구분</th><th>현장 / 구매처</th><th>내용</th><th>작업자</th><th>작성자</th><th>사진</th></tr></thead>
         <tbody>${list.map((r) => `<tr data-go="#/view/${esc(r.id)}">
           <td class="nowrap">${shortDate(r.date)} <span class="muted small">${dow(r.date)}</span></td>
           <td class="nowrap">${esc(r.time)}</td>
           <td class="nowrap">${tag(r.type)}${resultTag(r.result)}</td>
-          <td class="nowrap"><a href="${siteHref(r.site)}">${esc(r.site)}</a></td>
+          <td class="nowrap">${r.type === '구매' ? esc(r.vendor || '-') : `<a href="${siteHref(r.site)}">${esc(r.site)}</a>`}</td>
           <td class="clip">${esc(summary(r))}</td>
           <td>${esc(r.workers.join(', '))}</td>
           <td class="nowrap">${esc(r.author || '')}</td>
@@ -445,18 +530,20 @@
       const n = photoCount(r);
       html += `<div class="card" data-go="#/view/${esc(r.id)}">
         <div class="card-top">${tag(r.type)}${resultTag(r.result)}<span class="time">${r.author ? `<span class="author">${esc(r.author)}</span>` : ''}${esc(r.time)}</span></div>
-        <a class="card-title" href="${siteHref(r.site)}">${esc(r.site)}</a>
+        ${r.type === '구매' ? `<span class="card-title">${esc(r.vendor || '구매')}</span>` : `<a class="card-title" href="${siteHref(r.site)}">${esc(r.site)}</a>`}
         ${summary(r) ? `<div class="line">${esc(summary(r))}</div>` : ''}
-        <div class="muted small">${esc(r.workers.join(', ') || '작업자 없음')}${n ? ` · 사진 ${n}` : ''}</div></div>`;
+        <div class="muted small">${r.type === '구매' ? (n ? `영수증 ${n}` : '영수증 없음') : `${esc(r.workers.join(', ') || '작업자 없음')}${n ? ` · 사진 ${n}` : ''}`}</div></div>`;
     });
     box.innerHTML = html;
   }
 
   function exportCsv(list) {
     if (!list.length) { toast('내보낼 기록이 없습니다', true); return; }
-    const head = ['날짜', '시간', '구분', '현장', '작업자', '작업내용', '증상', '조치', '조치후상태', '상태메모', '사용자재', '사진수', '작성자'];
+    const head = ['날짜', '시간', '구분', '현장', '작업자', '작업내용', '증상', '조치', '조치후상태', '상태메모', '사용자재',
+      '구매처', '구매물품', '구매금액', '메모', '사진수', '작성자'];
+    const itemsText = (r) => (r.items || []).map((it) => `${it.name} ${num(it.qty)}${it.unit || ''} × ${won(it.price)}`).join(' / ');
     const rows = list.map((r) => [r.date, r.time, typeLabel(r.type), r.site, r.workers.join(', '), r.work, r.symptom, r.action,
-      r.result, r.resultMemo, r.materials, photoCount(r), r.author]);
+      r.result, r.resultMemo, r.materials, r.vendor, itemsText(r), r.type === '구매' ? num(r.total) : '', r.memo, photoCount(r), r.author]);
     const cell = (v) => {
       let s = String(v ?? '');
       if (/^[=+\-@]/.test(s)) s = "'" + s;
@@ -482,10 +569,11 @@
     let r = S.recs[id];
     if (!r) {
       main.innerHTML = loadingHTML;
-      r = await call('get', { id });
+      r = norm(await call('get', { id }));
       S.recs[id] = r;
     }
     const canDel = S.me.admin || r.authorEmail === S.me.email;
+    if (r.type === '구매') { viewPurchase(r, canDel); bindDelete(id); return; }
     const photos = r.type === '공사'
       ? (r.photosBefore.length || r.photosAfter.length
         ? `<div class="pair">${gallery('작업 전 사진', r.photosBefore) || '<section><h3>작업 전 사진</h3><p class="muted small">없음</p></section>'}${gallery('작업 후 사진', r.photosAfter) || '<section><h3>작업 후 사진</h3><p class="muted small">없음</p></section>'}</div>`
@@ -509,6 +597,9 @@
           ${canDel ? '<button class="btn danger" id="del">삭제</button>' : ''}
         </div>
       </article>`;
+    bindDelete(id);
+  }
+  function bindDelete(id) {
     $('#del')?.addEventListener('click', async () => {
       if (!confirm('이 기록을 삭제할까요? 첨부 사진도 함께 삭제됩니다.')) return;
       busy('삭제 중…');
@@ -520,11 +611,37 @@
       } catch (e) { busy(); toast(e.message, true); }
     });
   }
+  function viewPurchase(r, canDel) {
+    const rows = (r.items || []).map((it) => `<tr>
+        <td>${esc(it.name)}</td>
+        <td class="num">${num(it.qty).toLocaleString('ko-KR')}${esc(it.unit || '')}</td>
+        <td class="num">${won(it.price)}</td>
+        <td class="num">${won(num(it.qty) * num(it.price))}</td></tr>`).join('');
+    main.innerHTML = `
+      <div class="page-head"><button class="back" data-back>‹ 뒤로</button></div>
+      <article class="panel">
+        <div class="rec-head">${tag(r.type)}<span class="muted">${fullDate(r.date)} (${dow(r.date)}) ${esc(r.time)}</span></div>
+        <div class="rec-site">${esc(r.vendor || '구매처 없음')}</div>
+        <div class="tbl-wrap" style="margin-top:14px"><table class="tbl items-tbl">
+          <thead><tr><th>물품</th><th class="num">수량</th><th class="num">단가</th><th class="num">금액</th></tr></thead>
+          <tbody>${rows}</tbody>
+          <tfoot><tr><td colspan="3">합계</td><td class="num">${won(r.total)}</td></tr></tfoot>
+        </table></div>
+        ${r.memo ? `<dl class="kv"><dt>메모</dt><dd>${esc(r.memo)}</dd></dl>` : ''}
+        ${gallery('영수증 사진', r.photos)}
+        <p class="muted small foot">작성 ${esc(r.author)} · ${esc(r.createdAt)}${r.updatedAt && r.updatedAt !== r.createdAt ? ` · 수정 ${esc(r.updatedAt)}` : ''}</p>
+        <div class="actions">
+          <a class="btn primary" href="#/edit/${esc(r.id)}">수정</a>
+          <a class="btn" href="#/new?type=구매">새 구매 기록</a>
+          ${canDel ? '<button class="btn danger" id="del">삭제</button>' : ''}
+        </div>
+      </article>`;
+  }
 
   /* ───────── 현장별 이력 ───────── */
   async function pageSite(name) {
     main.innerHTML = loadingHTML;
-    const recs = (await call('site', { name })).sort(byTimeDesc);
+    const recs = (await call('site', { name })).map(norm).sort(byTimeDesc);
     recs.forEach((r) => { S.recs[r.id] = r; });
     let filter = '전체';
     const draw = () => {
@@ -648,42 +765,52 @@
   async function pageForm(id, q) {
     let r;
     if (id) {
-      if (!S.recs[id]) { main.innerHTML = loadingHTML; S.recs[id] = await call('get', { id }); }
+      if (!S.recs[id]) { main.innerHTML = loadingHTML; S.recs[id] = norm(await call('get', { id })); }
       r = JSON.parse(JSON.stringify(S.recs[id]));
     } else {
       const n = now();
-      r = {
-        type: q.get('type') === 'AS' ? 'AS' : '공사', date: n.date, time: n.time, site: q.get('site') || '',
+      const t = q.get('type');
+      r = norm({
+        type: t === 'AS' || t === '구매' ? t : '공사', date: n.date, time: n.time, site: q.get('site') || '',
         workers: S.workers.includes(S.me.name) ? [S.me.name] : [],
-        work: '', symptom: '', action: '', result: '', resultMemo: '', materials: '',
-        photosBefore: [], photosAfter: [], photos: [],
-      };
+      });
     }
-    const ph = {};
-    ['photosBefore', 'photosAfter', 'photos'].forEach((g) => { ph[g] = { keep: [...r[g]], add: [] }; });
+    const isBuy = r.type === '구매';
+    const ph = {
+      photosBefore: { keep: [...r.photosBefore], add: [] },
+      photosAfter: { keep: [...r.photosAfter], add: [] },
+      photos: { keep: isBuy ? [] : [...r.photos], add: [] },
+      receipt: { keep: isBuy ? [...r.photos] : [], add: [] },
+    };
     const picked = new Set(r.workers);
     const extraWorkers = r.workers.filter((w) => !S.workers.includes(w));
+    const blankItem = () => ({ name: '', qty: '1', unit: '', price: '' });
+    const rows = r.items.length
+      ? r.items.map((it) => ({ name: it.name, qty: String(it.qty ?? ''), unit: it.unit || '', price: String(it.price ?? '') }))
+      : [blankItem()];
     let dirty = false;
 
     main.innerHTML = `
       <div class="page-head"><button class="back" data-back>‹ 취소</button><h2 class="grow">${id ? '기록 수정' : '새 기록'}</h2></div>
       <form id="f" class="panel form" autocomplete="off" novalidate>
-        <div class="seg big" id="typeSeg"><button type="button" data-t="공사">공사</button><button type="button" data-t="AS">A/S</button></div>
+        <div class="seg big" id="typeSeg"><button type="button" data-t="공사">공사</button><button type="button" data-t="AS">A/S</button><button type="button" data-t="구매">구매</button></div>
         <div class="grid2">
           <label>날짜<input type="date" name="date" value="${esc(r.date)}" required></label>
           <label>시간<input type="time" name="time" value="${esc(r.time)}"></label>
         </div>
-        <label>현장명
-          <div class="combo"><input name="site" value="${esc(r.site)}" placeholder="현장명 입력 또는 선택"><div class="combo-list" id="siteList" hidden></div></div>
-        </label>
-        <div id="newSiteBox" class="subbox" hidden>
-          <p><b>새 현장</b>으로 등록됩니다. 아는 정보만 입력하세요.</p>
-          <input name="ns_address" placeholder="주소 (선택)">
-          <div class="grid2"><input name="ns_contact" placeholder="담당자 (선택)"><input name="ns_phone" type="tel" placeholder="연락처 (선택)"></div>
-        </div>
-        <div class="field"><span class="lbl">작업자 <span class="muted">(여러 명 선택 가능)</span></span>
-          <div class="chips" id="wChips"></div>
-          <div class="addrow" id="wAdd" hidden><input id="wNew" placeholder="새 작업자 이름" enterkeyhint="done"><button type="button" class="btn" id="wOk">추가</button></div>
+        <div data-for="공사 AS">
+          <label>현장명
+            <div class="combo"><input name="site" value="${esc(r.site)}" placeholder="현장명 입력 또는 선택 (초성 가능)"><div class="combo-list" id="siteList" hidden></div></div>
+          </label>
+          <div id="newSiteBox" class="subbox" hidden>
+            <p><b>새 현장</b>으로 등록됩니다. 아는 정보만 입력하세요.</p>
+            <input name="ns_address" placeholder="주소 (선택)">
+            <div class="grid2"><input name="ns_contact" placeholder="담당자 (선택)"><input name="ns_phone" type="tel" placeholder="연락처 (선택)"></div>
+          </div>
+          <div class="field"><span class="lbl">작업자 <span class="muted">(여러 명 선택 가능)</span></span>
+            <div class="chips" id="wChips"></div>
+            <div class="addrow" id="wAdd" hidden><input id="wNew" placeholder="새 작업자 이름" enterkeyhint="done"><button type="button" class="btn" id="wOk">추가</button></div>
+          </div>
         </div>
         <div data-for="공사">
           <label>작업 내용<textarea name="work" rows="3" placeholder="작업한 내용">${esc(r.work)}</textarea></label>
@@ -699,17 +826,53 @@
           </div>
           <div class="field"><span class="lbl">사진 <span class="muted">(선택)</span></span><div class="photos" data-g="photos"></div></div>
         </div>
-        <label>사용 자재 <span class="muted" style="font-weight:400">(선택)</span><textarea name="materials" rows="2" placeholder="예: PVC 파이프 50A 2개, 실리콘 1개">${esc(r.materials)}</textarea></label>
+        <label data-for="공사 AS">사용 자재 <span class="muted" style="font-weight:400">(선택)</span><textarea name="materials" rows="2" placeholder="예: PVC 파이프 50A 2개, 실리콘 1개">${esc(r.materials)}</textarea></label>
+        <div data-for="구매">
+          <label>구매처
+            <div class="combo"><input name="vendor" value="${esc(r.vendor)}" placeholder="구매처 입력 또는 선택 (초성 가능)"><div class="combo-list" id="vendorList" hidden></div></div>
+          </label>
+          <p class="hint" id="newVendorHint" hidden>새 구매처로 등록됩니다.</p>
+          <div class="field"><span class="lbl">물품 <span class="muted">(첫 글자나 초성으로 검색)</span></span>
+            <div id="itemRows" class="item-rows"></div>
+            <button type="button" class="btn sm add-item" id="addItem">+ 물품 추가</button>
+            <div class="items-total"><span>합계</span><b id="itemsTotal">0원</b></div>
+          </div>
+          <div class="field"><span class="lbl">영수증 사진 <span class="muted">(선택)</span></span><div class="photos" data-g="receipt"></div></div>
+          <label>메모 <span class="muted" style="font-weight:400">(선택)</span><textarea name="memo" rows="2" placeholder="예: 카드 결제, 현장 사용분">${esc(r.memo)}</textarea></label>
+        </div>
         <button class="btn primary block" type="submit">저장</button>
       </form>`;
 
     const f = $('#f');
     f.addEventListener('input', () => { dirty = true; });
 
+    // 공통: 이름 목록에서 고르는 입력칸 (첫 글자·초성 검색)
+    function bindCombo(input, listEl, getNames, onPick, newLabel, extra) {
+      const draw = () => {
+        const v = input.value.trim();
+        const names = searchNames(v, getNames());
+        const known = getNames().includes(v);
+        listEl.innerHTML = names.map((n) => `<button type="button" data-n="${esc(n)}">${esc(n)}${extra ? extra(n) : ''}</button>`).join('')
+          + (v && !known ? `<button type="button" class="add" data-new>+ '${esc(v)}' ${newLabel}</button>` : '');
+        listEl.hidden = !listEl.innerHTML;
+      };
+      input.addEventListener('focus', draw);
+      input.addEventListener('input', draw);
+      input.addEventListener('blur', () => setTimeout(() => { listEl.hidden = true; }, 150));
+      listEl.addEventListener('mousedown', (e) => e.preventDefault());
+      listEl.addEventListener('click', (e) => {
+        const b = e.target.closest('button'); if (!b) return;
+        if (b.dataset.n != null) input.value = b.dataset.n;
+        listEl.hidden = true;
+        dirty = true;
+        onPick(b.dataset.n != null ? b.dataset.n : null);
+      });
+    }
+
     // 구분
     const drawType = () => {
       $$('#typeSeg button').forEach((b) => b.classList.toggle('on', b.dataset.t === r.type));
-      $$('[data-for]', f).forEach((el) => { el.hidden = el.dataset.for !== r.type; });
+      $$('[data-for]', f).forEach((el) => { el.hidden = !el.dataset.for.split(' ').includes(r.type); });
     };
     $('#typeSeg').addEventListener('click', (e) => {
       const b = e.target.closest('button'); if (!b) return;
@@ -719,29 +882,16 @@
 
     // 현장명 선택 / 추가
     const siteIn = f.site;
-    const siteList = $('#siteList');
     const isKnown = (v) => S.sites.some((s) => s.name === v);
     const drawNewSite = () => { const v = siteIn.value.trim(); $('#newSiteBox').hidden = !v || isKnown(v); };
-    const drawCombo = () => {
-      const v = siteIn.value.trim();
-      const k = v.toLowerCase();
-      const m = S.sites.filter((s) => !k || s.name.toLowerCase().includes(k)).slice(0, 30);
-      siteList.innerHTML = m.map((s) => `<button type="button" data-n="${esc(s.name)}">${esc(s.name)}${s.address ? ` <span class="muted small">${esc(s.address)}</span>` : ''}</button>`).join('')
-        + (v && !isKnown(v) ? `<button type="button" class="add" data-new>+ '${esc(v)}' 새 현장으로 추가</button>` : '');
-      siteList.hidden = !siteList.innerHTML;
+    bindCombo(siteIn, $('#siteList'), () => S.sites.map((s) => s.name), (pickedName) => {
       drawNewSite();
-    };
-    siteIn.addEventListener('focus', drawCombo);
-    siteIn.addEventListener('input', drawCombo);
-    siteIn.addEventListener('blur', () => setTimeout(() => { siteList.hidden = true; }, 150));
-    siteList.addEventListener('mousedown', (e) => e.preventDefault());
-    siteList.addEventListener('click', (e) => {
-      const b = e.target.closest('button'); if (!b) return;
-      if (b.dataset.n != null) siteIn.value = b.dataset.n;
-      siteList.hidden = true;
-      drawNewSite();
-      if (b.dataset.new != null) f.ns_address.focus(); else siteIn.blur();
+      if (pickedName == null) f.ns_address.focus(); else siteIn.blur();
+    }, '새 현장으로 추가', (n) => {
+      const s = S.sites.find((x) => x.name === n);
+      return s && s.address ? ` <span class="muted small">${esc(s.address)}</span>` : '';
     });
+    siteIn.addEventListener('input', drawNewSite);
     drawNewSite();
 
     // 작업자
@@ -779,6 +929,83 @@
     });
     drawResult();
 
+    // 구매처
+    const vendorIn = f.vendor;
+    const drawVendorHint = () => { const v = vendorIn.value.trim(); $('#newVendorHint').hidden = !v || S.vendors.includes(v); };
+    bindCombo(vendorIn, $('#vendorList'), () => S.vendors, () => { drawVendorHint(); vendorIn.blur(); }, '새 구매처로 등록');
+    vendorIn.addEventListener('input', drawVendorHint);
+    drawVendorHint();
+
+    // 물품 목록
+    const itemInfo = (n) => S.items.find((it) => it.name === n);
+    const drawTotal = () => {
+      $('#itemsTotal').textContent = won(itemsTotal(rows));
+      $$('#itemRows .item-row').forEach((el) => {
+        const it = rows[+el.dataset.i];
+        el.querySelector('.it-amt').textContent = won(num(it.qty) * num(it.price));
+        el.querySelector('.it-new').hidden = !it.name.trim() || !!itemInfo(it.name.trim());
+      });
+    };
+    const drawRows = () => {
+      $('#itemRows').innerHTML = rows.map((it, i) => `
+        <div class="item-row" data-i="${i}">
+          <div class="item-top">
+            <div class="combo"><input class="it-name" value="${esc(it.name)}" placeholder="물품명"><div class="combo-list" hidden></div></div>
+            <button type="button" class="it-x" aria-label="물품 빼기">×</button>
+          </div>
+          <div class="item-nums">
+            <label class="mini">수량<input class="it-qty" inputmode="decimal" value="${esc(it.qty)}"></label>
+            <label class="mini">단위<input class="it-unit" value="${esc(it.unit)}" placeholder="개"></label>
+            <label class="mini">단가<input class="it-price" inputmode="numeric" value="${esc(it.price)}" placeholder="0"></label>
+            <div class="mini amt"><span>금액</span><b class="it-amt"></b></div>
+          </div>
+          <p class="hint it-new" hidden>새 물품으로 등록됩니다. 단위를 적어 두면 다음부터 자동으로 들어갑니다.</p>
+        </div>`).join('');
+      $$('#itemRows .item-row').forEach((el) => {
+        const i = +el.dataset.i;
+        const nameIn = el.querySelector('.it-name');
+        bindCombo(nameIn, el.querySelector('.combo-list'), () => S.items.map((it) => it.name), (pickedName) => {
+          rows[i].name = nameIn.value.trim();
+          const info = pickedName && itemInfo(pickedName);
+          if (info) {
+            if (!rows[i].unit && info.unit) rows[i].unit = info.unit;
+            if (!num(rows[i].price) && info.lastPrice) rows[i].price = String(info.lastPrice);
+            el.querySelector('.it-unit').value = rows[i].unit;
+            el.querySelector('.it-price').value = rows[i].price;
+            nameIn.blur();
+          } else {
+            el.querySelector('.it-unit').focus();
+          }
+          drawTotal();
+        }, '새 물품으로 등록', (n) => {
+          const info = itemInfo(n);
+          return info && info.lastPrice ? ` <span class="muted small">· 최근 ${won(info.lastPrice)}${info.unit ? '/' + esc(info.unit) : ''}</span>` : '';
+        });
+      });
+      drawTotal();
+    };
+    $('#itemRows').addEventListener('input', (e) => {
+      const el = e.target.closest('.item-row'); if (!el) return;
+      const it = rows[+el.dataset.i];
+      if (e.target.classList.contains('it-name')) it.name = e.target.value;
+      if (e.target.classList.contains('it-qty')) it.qty = e.target.value;
+      if (e.target.classList.contains('it-unit')) it.unit = e.target.value;
+      if (e.target.classList.contains('it-price')) it.price = e.target.value;
+      drawTotal();
+    });
+    $('#itemRows').addEventListener('click', (e) => {
+      const x = e.target.closest('.it-x'); if (!x) return;
+      rows.splice(+x.closest('.item-row').dataset.i, 1);
+      if (!rows.length) rows.push(blankItem());
+      dirty = true; drawRows();
+    });
+    $('#addItem').addEventListener('click', () => {
+      rows.push(blankItem());
+      drawRows();
+      $$('#itemRows .it-name').pop().focus();
+    });
+    drawRows();
+
     // 사진
     const drawPhotos = (g) => {
       const box = $(`.photos[data-g="${g}"]`);
@@ -810,31 +1037,42 @@
     // 저장
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
+      const buy = r.type === '구매';
       const site = siteIn.value.replace(/\s+/g, ' ').trim();
+      const vendor = vendorIn.value.replace(/\s+/g, ' ').trim();
       if (!f.date.value) { toast('날짜를 선택하세요', true); f.date.focus(); return; }
-      if (!site) { toast('현장명을 입력하세요', true); siteIn.focus(); return; }
-      const rec = {
-        id: r.id, type: r.type, date: f.date.value, time: f.time.value, site, workers: [...picked],
-        work: f.work.value.trim(), symptom: f.symptom.value.trim(), action: f.elements.action.value.trim(),
-        result: r.result, resultMemo: f.resultMemo.value.trim(), materials: f.materials.value.trim(),
-      };
-      const groups = r.type === '공사' ? ['photosBefore', 'photosAfter'] : ['photos'];
+      if (!buy && !site) { toast('현장명을 입력하세요', true); siteIn.focus(); return; }
+      const items = rows.map((it) => ({
+        name: it.name.replace(/\s+/g, ' ').trim(), qty: num(it.qty) || 1, unit: it.unit.trim(), price: num(it.price),
+      })).filter((it) => it.name);
+      if (buy && !items.length) { toast('물품을 하나 이상 입력하세요', true); $('#itemRows .it-name').focus(); return; }
+      const rec = buy
+        ? { id: r.id, type: r.type, date: f.date.value, time: f.time.value, vendor, items, memo: f.memo.value.trim(), site: '', workers: [] }
+        : {
+          id: r.id, type: r.type, date: f.date.value, time: f.time.value, site, workers: [...picked],
+          work: f.work.value.trim(), symptom: f.symptom.value.trim(), action: f.elements.action.value.trim(),
+          result: r.result, resultMemo: f.resultMemo.value.trim(), materials: f.materials.value.trim(),
+        };
+      const groups = r.type === '공사' ? ['photosBefore', 'photosAfter'] : buy ? ['receipt'] : ['photos'];
       const total = groups.reduce((n, g) => n + ph[g].add.length, 0);
+      const label = buy ? (vendor || '구매') : site;
       let done = 0;
       try {
         for (const g of groups) {
           while (ph[g].add.length) {
             busy(`사진 올리는 중 (${++done}/${total})`);
-            const fid = await call('upload', { data: ph[g].add[0], name: `${rec.date}_${site}_${done}.jpg`, date: rec.date });
+            const fid = await call('upload', { data: ph[g].add[0], name: `${rec.date}_${label}_${done}.jpg`, date: rec.date });
             ph[g].keep.push(fid);
             ph[g].add.shift();
           }
         }
-        ['photosBefore', 'photosAfter', 'photos'].forEach((g) => { rec[g] = groups.includes(g) ? ph[g].keep : []; });
+        rec.photosBefore = r.type === '공사' ? ph.photosBefore.keep : [];
+        rec.photosAfter = r.type === '공사' ? ph.photosAfter.keep : [];
+        rec.photos = buy ? ph.receipt.keep : r.type === 'AS' ? ph.photos.keep : [];
         busy('저장 중…');
-        const siteInfo = isKnown(site) ? null : { address: f.ns_address.value.trim(), contact: f.ns_contact.value.trim(), phone: f.ns_phone.value.trim() };
+        const siteInfo = buy || isKnown(site) ? null : { address: f.ns_address.value.trim(), contact: f.ns_contact.value.trim(), phone: f.ns_phone.value.trim() };
         const res = await call('saveRecord', { record: rec, siteInfo });
-        S.recs[res.record.id] = res.record;
+        S.recs[res.record.id] = norm(res.record);
         S.monthKey = null;
         setMeta(res.meta);
         dirty = false;
@@ -888,6 +1126,20 @@
             <span class="name">${esc(w)}</span>
             <button class="btn sm" data-act="renameWorker" data-v="${esc(w)}">이름 변경</button>
             <button class="btn sm danger" data-act="delWorker" data-v="${esc(w)}">삭제</button></div>`).join('') || '<p class="muted">없음</p>'}</div>
+        </section>
+        <section class="panel">
+          <h3 style="margin-top:0">물품 <span class="muted small">${S.items.length}개 · 삭제해도 기존 구매 기록은 남습니다</span></h3>
+          <div class="mgr-list">${S.items.map((it) => `<div class="mgr-row">
+            <span class="name">${esc(it.name)} <span class="muted small">${[it.unit, it.lastPrice ? '최근 ' + won(it.lastPrice) : ''].filter(Boolean).map(esc).join(' · ')}</span></span>
+            <button class="btn sm" data-act="renameItem" data-v="${esc(it.name)}">이름 변경</button>
+            <button class="btn sm danger" data-act="delItem" data-v="${esc(it.name)}">삭제</button></div>`).join('') || '<p class="muted">없음 · 구매 기록에서 새 물품을 등록하면 여기에 쌓입니다</p>'}</div>
+        </section>
+        <section class="panel">
+          <h3 style="margin-top:0">구매처 <span class="muted small">${S.vendors.length}곳 · 삭제해도 기존 구매 기록은 남습니다</span></h3>
+          <div class="mgr-list">${S.vendors.map((v) => `<div class="mgr-row">
+            <span class="name">${esc(v)}</span>
+            <button class="btn sm" data-act="renameVendor" data-v="${esc(v)}">이름 변경</button>
+            <button class="btn sm danger" data-act="delVendor" data-v="${esc(v)}">삭제</button></div>`).join('') || '<p class="muted">없음</p>'}</div>
         </section>`;
       $('#uf').addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -910,7 +1162,7 @@
         run('변경 중…', async () => { U = await call('saveUser', { user: { ...u, admin: !u.admin } }); });
       } else if (act === 'delUser') {
         if (confirm(`${v} 계정을 삭제할까요? 이 계정은 더 이상 로그인할 수 없습니다.`)) run('삭제 중…', async () => { U = await call('deleteUser', { email: v }); }, '삭제했습니다');
-      } else if (act === 'renameSite' || act === 'renameWorker') {
+      } else if (['renameSite', 'renameWorker', 'renameItem', 'renameVendor'].includes(act)) {
         const nn = prompt(`'${v}'의 새 이름 (기존 기록도 함께 바뀝니다)`, v);
         if (nn && nn.trim() && nn.trim() !== v) {
           run('변경 중…', async () => { setMeta(await call(act, { name: v, newName: nn.trim() })); S.recs = {}; S.monthKey = null; }, '이름을 바꿨습니다');
@@ -919,6 +1171,10 @@
         if (confirm(`현장 '${v}'을(를) 목록에서 삭제할까요?\n기존 기록은 남습니다.`)) run('삭제 중…', async () => { setMeta(await call('deleteSite', { name: v })); }, '삭제했습니다');
       } else if (act === 'delWorker') {
         if (confirm(`작업자 '${v}'을(를) 목록에서 삭제할까요?\n기존 기록은 남습니다.`)) run('삭제 중…', async () => { setMeta(await call('deleteWorker', { name: v })); }, '삭제했습니다');
+      } else if (act === 'delItem') {
+        if (confirm(`물품 '${v}'을(를) 목록에서 삭제할까요?\n기존 구매 기록은 남습니다.`)) run('삭제 중…', async () => { setMeta(await call('deleteItem', { name: v })); }, '삭제했습니다');
+      } else if (act === 'delVendor') {
+        if (confirm(`구매처 '${v}'을(를) 목록에서 삭제할까요?\n기존 구매 기록은 남습니다.`)) run('삭제 중…', async () => { setMeta(await call('deleteVendor', { name: v })); }, '삭제했습니다');
       }
     }
     draw();
@@ -1008,7 +1264,7 @@
       if (d.me.email !== S.me.email) { S.recs = {}; S.monthIds = []; S.monthKey = null; }
       applyMe(d.me);
       if (list && range().key === rg.key) {
-        list.forEach((r) => { S.recs[r.id] = r; });
+        list.forEach((r) => { S.recs[r.id] = norm(r); });
         S.monthIds = list.map((r) => r.id);
         S.monthKey = rg.key;
       }
@@ -1034,9 +1290,10 @@
       applyMe(cache.me);
       renderSide();
       S.sites = cache.meta.sites; S.workers = cache.meta.workers; S.stats = cache.meta.stats;
+      S.items = cache.meta.items || []; S.vendors = cache.meta.vendors || [];
       drawSideList();
       if (cache.recs && S.period === 'recent') {
-        cache.recs.forEach((r) => { S.recs[r.id] = r; });
+        cache.recs.forEach((r) => { S.recs[r.id] = norm(r); });
         S.monthIds = cache.recs.map((r) => r.id);
         S.monthKey = range().key;
       }

@@ -278,3 +278,25 @@ main { padding: 14px 16px calc(var(--nav-h) + 28px + env(safe-area-inset-bottom,
   border: 2px solid var(--accent-bg); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) { .sum .updating::before { animation: none; } }
+
+/* ── 구매 ── */
+:root { --bu: #534ab7; --bu-bg: #eeedfe; }
+.tag.bu { background: var(--bu-bg); color: var(--bu); }
+.seg.big button[data-t="구매"].on { background: var(--bu); color: #fff; }
+.hint { margin: 6px 0 0; font-size: 13px; font-weight: 400; color: var(--muted); }
+.item-rows { display: flex; flex-direction: column; gap: 8px; font-weight: 400; }
+.item-row { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fafbfc; }
+.item-top { display: flex; gap: 6px; align-items: flex-start; }
+.item-top .combo { flex: 1; min-width: 0; }
+.it-x { flex: none; width: 40px; height: 42px; border: 1px solid var(--field); border-radius: 8px; background: #fff; color: var(--muted); font-size: 20px; cursor: pointer; }
+.item-nums { display: grid; grid-template-columns: 1fr 0.8fr 1.3fr 1.3fr; gap: 6px; margin-top: 8px; align-items: end; }
+.form .item-nums label.mini, .item-nums .mini { margin: 0; gap: 3px; font-size: 12px; font-weight: 400; color: var(--muted); display: flex; flex-direction: column; min-width: 0; }
+.item-nums input { padding: 8px; }
+.item-nums .amt b { font-size: 15px; color: var(--text); padding: 8px 0; text-align: right; white-space: nowrap; }
+.item-nums .amt span { text-align: right; }
+.add-item { align-self: flex-start; margin-top: 8px; }
+.items-total { display: flex; justify-content: space-between; align-items: baseline; border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; font-weight: 600; }
+.items-total b { font-size: 18px; color: var(--bu); }
+.items-tbl .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.items-tbl tfoot td { font-weight: 700; border-top: 1px solid var(--line); border-bottom: 0; }
+.sum b { color: var(--bu); }
