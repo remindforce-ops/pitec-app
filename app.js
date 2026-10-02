@@ -59,7 +59,7 @@
   /* ───────── 상태 ───────── */
   const S = {
     me: null, sites: [], workers: [], stats: {},
-    month: now().date.slice(0, 7), type: '전체', q: '',
+    month: now().date.slice(0, 7), period: 'recent', type: '전체', q: '',
     recs: {}, monthIds: [], monthKey: null, sideQ: '',
   };
   function setMeta(d) {
@@ -165,13 +165,13 @@
   }
 
   /* ───────── 데모 모드 (이 기기에만 저장) ───────── */
-  const DEMO_KEY = 'pt.demo.v1';
+  const DEMO_KEY = 'pt.demo.v2';
   function demoSeed() {
     const d = (off) => { const x = new Date(); x.setDate(x.getDate() - off); return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`; };
     const rec = (o) => Object.assign({
       id: Math.random().toString(36).slice(2, 10), type: '공사', time: '09:00', workers: [], work: '', symptom: '', action: '',
       result: '', resultMemo: '', materials: '', photosBefore: [], photosAfter: [], photos: [],
-      author: '데모 관리자', authorEmail: 'demo@example.com', createdAt: '', updatedAt: '',
+      author: (o.workers && o.workers[0]) || '데모 관리자', authorEmail: 'demo@example.com', createdAt: '', updatedAt: '',
     }, o);
     return {
       sites: [
@@ -303,6 +303,9 @@
     const fn = PAGES[page] || pageList;
     const nav = page === 'edit' ? 'new' : page === 'view' || page === '' ? 'list' : page === 'site' ? 'sites' : page;
     $$('[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === nav));
+    const sub = { list: '기록', sites: '현장', new: page === 'edit' ? '기록 수정' : '새 기록', me: '내 정보', admin: '관리' }[nav] || '기록';
+    $('#brandSub').textContent = sub;
+    document.title = `파이텍 앱 · ${sub}`;
     pageClick = null;
     drawSideList();
     window.scrollTo(0, 0);
@@ -314,12 +317,24 @@
   }
 
   /* ───────── 목록 ───────── */
+  // 조회 기간: 최근 30일(기본) 또는 선택한 달
+  function range() {
+    if (S.period === 'recent') {
+      const d = new Date();
+      d.setDate(d.getDate() - 29);
+      const from = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      const to = now().date;
+      return { key: 'recent:' + to, from, to };
+    }
+    return { key: S.month, from: S.month + '-01', to: S.month + '-31' };
+  }
   async function loadMonth() {
-    if (S.monthKey === S.month) return;
-    const list = await call('list', { from: S.month + '-01', to: S.month + '-31' });
+    const { key, from, to } = range();
+    if (S.monthKey === key) return;
+    const list = await call('list', { from, to });
     list.forEach((r) => { S.recs[r.id] = r; });
     S.monthIds = list.map((r) => r.id);
-    S.monthKey = S.month;
+    S.monthKey = key;
   }
   function filtered() {
     const q = S.q.toLowerCase();
@@ -342,6 +357,7 @@
         <div class="row">
           <div class="seg" id="typeSeg">${['전체', '공사', 'AS'].map((t) => `<button type="button" data-t="${t}" class="${S.type === t ? 'on' : ''}">${t === 'AS' ? 'A/S' : t}</button>`).join('')}</div>
           <div class="monthnav">
+            <button class="btn ${S.period === 'recent' ? 'on' : ''}" id="mRecent">최근 30일</button>
             <button class="btn" id="mPrev" aria-label="이전 달">‹</button>
             <input type="month" id="month" value="${S.month}">
             <button class="btn" id="mNext" aria-label="다음 달">›</button>
@@ -360,31 +376,36 @@
     });
     const reload = async () => {
       $('#month').value = S.month;
+      $('#mRecent').classList.toggle('on', S.period === 'recent');
+      $('#month').classList.toggle('dim', S.period === 'recent');
       $('#res').innerHTML = loadingHTML;
       try { await loadMonth(); drawList(); } catch (e) { $('#res').innerHTML = emptyHTML(e.message); }
     };
-    $('#month').addEventListener('change', (e) => { if (e.target.value) { S.month = e.target.value; reload(); } });
-    $('#mPrev').addEventListener('click', () => { shiftMonth(-1); reload(); });
-    $('#mNext').addEventListener('click', () => { shiftMonth(1); reload(); });
+    $('#mRecent').addEventListener('click', () => { S.period = 'recent'; S.month = now().date.slice(0, 7); reload(); });
+    $('#month').addEventListener('change', (e) => { if (e.target.value) { S.period = 'month'; S.month = e.target.value; reload(); } });
+    $('#mPrev').addEventListener('click', () => { if (S.period === 'month') shiftMonth(-1); S.period = 'month'; reload(); });
+    $('#mNext').addEventListener('click', () => { if (S.period === 'month') shiftMonth(1); S.period = 'month'; reload(); });
     $('#csv').addEventListener('click', () => exportCsv(filtered()));
     await reload();
   }
 
   function drawList() {
     const box = $('#res');
-    if (!box || S.monthKey !== S.month) return;
+    const rg = range();
+    if (!box || S.monthKey !== rg.key) return;
     const list = filtered();
     const [y, m] = S.month.split('-');
     const nGs = list.filter((r) => r.type === '공사').length;
-    const head = `<p class="sum">${+y}년 ${+m}월 · ${list.length}건 (공사 ${nGs} · A/S ${list.length - nGs})</p>`;
+    const label = S.period === 'recent' ? `최근 30일 (${shortDate(rg.from)} ~ ${shortDate(rg.to)})` : `${+y}년 ${+m}월`;
+    const head = `<p class="sum">${label} · ${list.length}건 (공사 ${nGs} · A/S ${list.length - nGs})</p>`;
     if (!list.length) {
-      box.innerHTML = head + emptyHTML(S.q || S.type !== '전체' ? '조건에 맞는 기록이 없습니다.' : '이 달의 기록이 없습니다.',
+      box.innerHTML = head + emptyHTML(S.q || S.type !== '전체' ? '조건에 맞는 기록이 없습니다.' : (S.period === 'recent' ? '최근 30일 동안의 기록이 없습니다.' : '이 달의 기록이 없습니다.'),
         '<br><a class="btn primary" href="#/new">+ 새 기록</a>');
       return;
     }
     if (isWide()) {
       box.innerHTML = head + `<div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>날짜</th><th>시간</th><th>구분</th><th>현장</th><th>내용</th><th>작업자</th><th>사진</th></tr></thead>
+        <thead><tr><th>날짜</th><th>시간</th><th>구분</th><th>현장</th><th>내용</th><th>작업자</th><th>작성자</th><th>사진</th></tr></thead>
         <tbody>${list.map((r) => `<tr data-go="#/view/${esc(r.id)}">
           <td class="nowrap">${shortDate(r.date)} <span class="muted small">${dow(r.date)}</span></td>
           <td class="nowrap">${esc(r.time)}</td>
@@ -392,6 +413,7 @@
           <td class="nowrap"><a href="${siteHref(r.site)}">${esc(r.site)}</a></td>
           <td class="clip">${esc(summary(r))}</td>
           <td>${esc(r.workers.join(', '))}</td>
+          <td class="nowrap">${esc(r.author || '')}</td>
           <td>${photoCount(r) || ''}</td></tr>`).join('')}</tbody></table></div>`;
       return;
     }
@@ -401,7 +423,7 @@
       if (r.date !== day) { day = r.date; html += `<p class="day">${dateLabel(day)}</p>`; }
       const n = photoCount(r);
       html += `<div class="card" data-go="#/view/${esc(r.id)}">
-        <div class="card-top">${tag(r.type)}${resultTag(r.result)}<span class="time">${esc(r.time)}</span></div>
+        <div class="card-top">${tag(r.type)}${resultTag(r.result)}<span class="time">${r.author ? `<span class="author">${esc(r.author)}</span>` : ''}${esc(r.time)}</span></div>
         <a class="card-title" href="${siteHref(r.site)}">${esc(r.site)}</a>
         ${summary(r) ? `<div class="line">${esc(summary(r))}</div>` : ''}
         <div class="muted small">${esc(r.workers.join(', ') || '작업자 없음')}${n ? ` · 사진 ${n}` : ''}</div></div>`;
@@ -422,7 +444,7 @@
     const csv = '﻿' + [head, ...rows].map((r) => r.map(cell).join(',')).join('\r\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    a.download = `파이텍_기록_${S.month}.csv`;
+    a.download = `파이텍_기록_${S.period === 'recent' ? '최근30일_' + now().date : S.month}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -742,7 +764,8 @@
       const thumb = (src, kind, i) => `<div class="ph"><img src="${esc(src)}" alt=""><button type="button" class="ph-x" data-kind="${kind}" data-i="${i}" aria-label="사진 빼기">×</button></div>`;
       box.innerHTML = ph[g].keep.map((p, i) => thumb(photoUrl(p, 300), 'keep', i)).join('')
         + ph[g].add.map((p, i) => thumb(p, 'add', i)).join('')
-        + '<label class="ph-add"><input type="file" accept="image/*" multiple hidden><b>+</b>사진</label>';
+        + '<label class="ph-add"><input type="file" accept="image/*" capture="environment" hidden><b>📷</b>촬영</label>'
+        + '<label class="ph-add"><input type="file" accept="image/*" multiple hidden><b>🖼</b>앨범</label>';
     };
     $$('.photos', f).forEach((box) => {
       const g = box.dataset.g;

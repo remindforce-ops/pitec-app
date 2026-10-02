@@ -146,12 +146,16 @@ main { padding: 14px 16px calc(var(--nav-h) + 28px + env(safe-area-inset-bottom,
 .monthnav { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
 .monthnav input { width: auto; padding: 7px 8px; font-size: 15px; }
 .monthnav .btn { padding: 7px 10px; }
+.monthnav .btn.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.monthnav #mRecent { margin-right: 4px; }
+.monthnav input.dim { color: var(--muted); }
 .sum { color: var(--muted); font-size: 13px; margin: 6px 2px 4px; }
 .day { font-size: 13px; color: var(--muted); font-weight: 700; margin: 16px 2px 6px; }
 .card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 8px; cursor: pointer; }
 .card:active { background: #f7f9fb; }
 .card-top { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
-.card-top .time { margin-left: auto; color: var(--muted); font-size: 13px; }
+.card-top .time { margin-left: auto; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.card-top .author { color: var(--text2); font-weight: 600; margin-right: 8px; }
 .card-title { font-weight: 700; font-size: 16px; }
 .card .line { color: var(--text2); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -232,7 +236,7 @@ main { padding: 14px 16px calc(var(--nav-h) + 28px + env(safe-area-inset-bottom,
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   color: var(--muted); cursor: pointer; font-size: 13px; margin: 0 !important;
 }
-.ph-add b { font-size: 24px; font-weight: 400; line-height: 1; }
+.ph-add b { font-size: 22px; font-weight: 400; line-height: 1.2; }
 
 /* ── 관리 ── */
 .inline-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
