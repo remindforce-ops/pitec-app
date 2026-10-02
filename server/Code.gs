@@ -35,7 +35,7 @@ const TABLES = {
   },
   items: {
     name: '물품',
-    cols: [['name', '물품명'], ['unit', '단위'], ['lastPrice', '최근단가'], ['createdBy', '등록자'], ['createdAt', '등록일시']],
+    cols: [['name', '물품명'], ['unit', '단위'], ['lastPrice', '최근단가'], ['createdBy', '등록자'], ['createdAt', '등록일시'], ['vat', '부가세']],
   },
   vendors: {
     name: '구매처',
@@ -205,7 +205,7 @@ function saveRecord(rec, siteInfo, me) {
     photos: type === 'AS' || buy ? photoIds(rec.photos) : '',
     vendor,
     items: items.length ? JSON.stringify(items) : '',
-    total: buy ? String(items.reduce((t, it) => t + it.qty * it.price, 0)) : '',
+    total: buy ? String(items.reduce((t, it) => t + lineTotal(it), 0)) : '',
     memo: buy ? text(rec.memo) : '',
     updatedAt: stamp(),
   };
@@ -253,7 +253,7 @@ function meta() {
   const sites = readAll('sites').map((s) => ({ name: s.name, address: s.address, contact: s.contact, phone: s.phone }))
     .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
   const workers = readAll('workers').map((w) => w.name).sort((a, b) => a.localeCompare(b, 'ko'));
-  const items = readAll('items').map((i) => ({ name: i.name, unit: i.unit, lastPrice: Number(i.lastPrice) || 0 }))
+  const items = readAll('items').map((i) => ({ name: i.name, unit: i.unit, lastPrice: Number(i.lastPrice) || 0, vat: i.vat || '' }))
     .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
   const vendors = readAll('vendors').map((v) => v.name).sort((a, b) => a.localeCompare(b, 'ko'));
   return { sites, workers, stats, items, vendors };
@@ -328,7 +328,14 @@ function cleanItems(list) {
     qty: Math.max(0, Number(it && it.qty) || 0) || 1,
     unit: clean(it && it.unit).slice(0, 10),
     price: Math.max(0, Math.round(Number(it && it.price) || 0)),
+    vat: it && (it.vat === '별도' || it.vat === '포함') ? it.vat : '',
   })).filter((it) => it.name).slice(0, 100);
+}
+
+// 부가세: '' = 선택 안 함, '별도' = 공급가액의 10% 추가, '포함' = 공급가액 안에 든 부가세(÷11)
+function lineTotal(it) {
+  const supply = Math.round(it.qty * it.price);
+  return it.vat === '별도' ? supply + Math.round(supply * 0.1) : supply;
 }
 
 function ensureItem(it, me) {
@@ -337,10 +344,11 @@ function ensureItem(it, me) {
     let changed = false;
     if (it.unit && it.unit !== row.unit) { row.unit = it.unit; changed = true; }
     if (it.price && String(it.price) !== row.lastPrice) { row.lastPrice = String(it.price); changed = true; }
+    if ((it.vat || '') !== (row.vat || '')) { row.vat = it.vat || ''; changed = true; }
     if (changed) writeRow('items', row._row, row);
     return;
   }
-  writeRow('items', 0, { name: it.name, unit: it.unit, lastPrice: it.price ? String(it.price) : '', createdBy: me.name, createdAt: stamp() });
+  writeRow('items', 0, { name: it.name, unit: it.unit, lastPrice: it.price ? String(it.price) : '', createdBy: me.name, createdAt: stamp(), vat: it.vat || '' });
 }
 
 function ensureVendor(name, me) {

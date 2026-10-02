@@ -30,7 +30,21 @@
   const tag = (t) => `<span class="tag ${typeClass(t)}">${typeLabel(t)}</span>`;
   const won = (n) => `${Math.round(Number(n) || 0).toLocaleString('ko-KR')}원`;
   const num = (v) => { const n = Number(String(v ?? '').replace(/[^\d.]/g, '')); return Number.isFinite(n) ? n : 0; };
-  const itemsTotal = (items) => (items || []).reduce((t, it) => t + num(it.qty) * num(it.price), 0);
+  // 부가세: '' = 선택 안 함, '별도' = 공급가액의 10% 추가, '포함' = 공급가액 안에 든 부가세(÷11) 표시
+  const VATS = [['', '선택 안 함'], ['별도', '별도'], ['포함', '포함']];
+  const lineCalc = (it) => {
+    const supply = Math.round(num(it.qty) * num(it.price));
+    const mode = it.vat === '별도' || it.vat === '포함' ? it.vat : '';
+    const vat = mode === '별도' ? Math.round(supply * 0.1) : mode === '포함' ? Math.round(supply / 11) : 0;
+    return { supply, vat, total: mode === '별도' ? supply + vat : supply, mode };
+  };
+  const itemsSum = (items) => (items || []).reduce((t, it) => {
+    const c = lineCalc(it);
+    t.supply += c.supply; t.vat += c.vat; t.total += c.total;
+    return t;
+  }, { supply: 0, vat: 0, total: 0 });
+  const itemsTotal = (items) => itemsSum(items).total;
+  const vatLabel = (mode) => (mode ? `부가세 ${mode}` : '');
   const recTitle = (r) => (r.type === '구매' ? (r.vendor || '구매') : r.site);
 
   // 한글 초성 검색: 'ㅍ' → 파이프, 'ㅇㅂ' → 엘보
@@ -283,8 +297,8 @@
     db.items = db.items || []; db.vendors = db.vendors || [];
     const ensureItem = (it) => {
       const x = db.items.find((i) => i.name === it.name);
-      if (x) { if (it.unit) x.unit = it.unit; if (num(it.price)) x.lastPrice = num(it.price); }
-      else db.items.push({ name: it.name, unit: it.unit || '', lastPrice: num(it.price) });
+      if (x) { if (it.unit) x.unit = it.unit; if (num(it.price)) x.lastPrice = num(it.price); x.vat = it.vat || ''; }
+      else db.items.push({ name: it.name, unit: it.unit || '', lastPrice: num(it.price), vat: it.vat || '' });
     };
     const ensureVendor = (n) => { if (n && !db.vendors.includes(n)) db.vendors.push(n); };
     const users = () => ({ owner: me.email, users: db.users });
@@ -541,7 +555,10 @@
     if (!list.length) { toast('내보낼 기록이 없습니다', true); return; }
     const head = ['날짜', '시간', '구분', '현장', '작업자', '작업내용', '증상', '조치', '조치후상태', '상태메모', '사용자재',
       '구매처', '구매물품', '구매금액', '메모', '사진수', '작성자'];
-    const itemsText = (r) => (r.items || []).map((it) => `${it.name} ${num(it.qty)}${it.unit || ''} × ${won(it.price)}`).join(' / ');
+    const itemsText = (r) => (r.items || []).map((it) => {
+      const c = lineCalc(it);
+      return `${it.name} ${num(it.qty)}${it.unit || ''} × ${won(it.price)} = ${won(c.total)}${c.mode ? ` (부가세 ${c.mode} ${won(c.vat)})` : ''}`;
+    }).join(' / ');
     const rows = list.map((r) => [r.date, r.time, typeLabel(r.type), r.site, r.workers.join(', '), r.work, r.symptom, r.action,
       r.result, r.resultMemo, r.materials, r.vendor, itemsText(r), r.type === '구매' ? num(r.total) : '', r.memo, photoCount(r), r.author]);
     const cell = (v) => {
@@ -612,20 +629,26 @@
     });
   }
   function viewPurchase(r, canDel) {
-    const rows = (r.items || []).map((it) => `<tr>
+    const sum = itemsSum(r.items);
+    const rows = (r.items || []).map((it) => {
+      const c = lineCalc(it);
+      return `<tr>
         <td>${esc(it.name)}</td>
         <td class="num">${num(it.qty).toLocaleString('ko-KR')}${esc(it.unit || '')}</td>
         <td class="num">${won(it.price)}</td>
-        <td class="num">${won(num(it.qty) * num(it.price))}</td></tr>`).join('');
+        <td class="num">${won(c.supply)}</td>
+        <td class="num">${c.mode ? `${won(c.vat)}<br><span class="muted small">${c.mode}</span>` : '<span class="muted">-</span>'}</td>
+        <td class="num">${won(c.total)}</td></tr>`;
+    }).join('');
     main.innerHTML = `
       <div class="page-head"><button class="back" data-back>‹ 뒤로</button></div>
       <article class="panel">
         <div class="rec-head">${tag(r.type)}<span class="muted">${fullDate(r.date)} (${dow(r.date)}) ${esc(r.time)}</span></div>
         <div class="rec-site">${esc(r.vendor || '구매처 없음')}</div>
         <div class="tbl-wrap" style="margin-top:14px"><table class="tbl items-tbl">
-          <thead><tr><th>물품</th><th class="num">수량</th><th class="num">단가</th><th class="num">금액</th></tr></thead>
+          <thead><tr><th>물품</th><th class="num">수량</th><th class="num">단가</th><th class="num">공급가액</th><th class="num">부가세</th><th class="num">금액</th></tr></thead>
           <tbody>${rows}</tbody>
-          <tfoot><tr><td colspan="3">합계</td><td class="num">${won(r.total)}</td></tr></tfoot>
+          <tfoot><tr><td colspan="3">합계</td><td class="num">${won(sum.supply)}</td><td class="num">${won(sum.vat)}</td><td class="num">${won(r.total)}</td></tr></tfoot>
         </table></div>
         ${r.memo ? `<dl class="kv"><dt>메모</dt><dd>${esc(r.memo)}</dd></dl>` : ''}
         ${gallery('영수증 사진', r.photos)}
@@ -785,9 +808,9 @@
     };
     const picked = new Set(r.workers);
     const extraWorkers = r.workers.filter((w) => !S.workers.includes(w));
-    const blankItem = () => ({ name: '', qty: '1', unit: '', price: '' });
+    const blankItem = () => ({ name: '', qty: '1', unit: '', price: '', vat: '' });
     const rows = r.items.length
-      ? r.items.map((it) => ({ name: it.name, qty: String(it.qty ?? ''), unit: it.unit || '', price: String(it.price ?? '') }))
+      ? r.items.map((it) => ({ name: it.name, qty: String(it.qty ?? ''), unit: it.unit || '', price: String(it.price ?? ''), vat: it.vat || '' }))
       : [blankItem()];
     let dirty = false;
 
@@ -836,7 +859,11 @@
           <div class="field"><span class="lbl">물품 <span class="muted">(첫 글자나 초성으로 검색)</span></span>
             <div id="itemRows" class="item-rows"></div>
             <button type="button" class="btn sm add-item" id="addItem">+ 물품 추가</button>
-            <div class="items-total"><span>합계</span><b id="itemsTotal">0원</b></div>
+            <div class="items-total">
+              <div><span>공급가액</span><span id="sumSupply">0원</span></div>
+              <div><span>부가세</span><span id="sumVat">0원</span></div>
+              <div class="grand"><span>합계</span><b id="itemsTotal">0원</b></div>
+            </div>
           </div>
           <div class="field"><span class="lbl">영수증 사진 <span class="muted">(선택)</span></span><div class="photos" data-g="receipt"></div></div>
           <label>메모 <span class="muted" style="font-weight:400">(선택)</span><textarea name="memo" rows="2" placeholder="예: 카드 결제, 현장 사용분">${esc(r.memo)}</textarea></label>
@@ -940,10 +967,16 @@
     // 물품 목록
     const itemInfo = (n) => S.items.find((it) => it.name === n);
     const drawTotal = () => {
-      $('#itemsTotal').textContent = won(itemsTotal(rows));
+      const sum = itemsSum(rows);
+      $('#sumSupply').textContent = won(sum.supply);
+      $('#sumVat').textContent = won(sum.vat);
+      $('#itemsTotal').textContent = won(sum.total);
       $$('#itemRows .item-row').forEach((el) => {
         const it = rows[+el.dataset.i];
-        el.querySelector('.it-amt').textContent = won(num(it.qty) * num(it.price));
+        const c = lineCalc(it);
+        el.querySelector('.it-supply').textContent = won(c.supply);
+        el.querySelector('.it-vat').textContent = c.mode ? won(c.vat) : '-';
+        el.querySelector('.it-amt').textContent = won(c.total);
         el.querySelector('.it-new').hidden = !it.name.trim() || !!itemInfo(it.name.trim());
       });
     };
@@ -958,7 +991,10 @@
             <label class="mini">수량<input class="it-qty" inputmode="decimal" value="${esc(it.qty)}"></label>
             <label class="mini">단위<input class="it-unit" value="${esc(it.unit)}" placeholder="개"></label>
             <label class="mini">단가<input class="it-price" inputmode="numeric" value="${esc(it.price)}" placeholder="0"></label>
-            <div class="mini amt"><span>금액</span><b class="it-amt"></b></div>
+            <div class="mini calc"><span>공급가액</span><b class="it-supply"></b></div>
+            <label class="mini">부가세<select class="it-vatmode">${VATS.map(([v, l]) => `<option value="${v}"${(it.vat || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+            <div class="mini calc"><span>부가세액</span><b class="it-vat"></b></div>
+            <div class="mini calc amt"><span>금액</span><b class="it-amt"></b></div>
           </div>
           <p class="hint it-new" hidden>새 물품으로 등록됩니다. 단위를 적어 두면 다음부터 자동으로 들어갑니다.</p>
         </div>`).join('');
@@ -971,8 +1007,10 @@
           if (info) {
             if (!rows[i].unit && info.unit) rows[i].unit = info.unit;
             if (!num(rows[i].price) && info.lastPrice) rows[i].price = String(info.lastPrice);
+            if (!rows[i].vat && info.vat) rows[i].vat = info.vat;
             el.querySelector('.it-unit').value = rows[i].unit;
             el.querySelector('.it-price').value = rows[i].price;
+            el.querySelector('.it-vatmode').value = rows[i].vat || '';
             nameIn.blur();
           } else {
             el.querySelector('.it-unit').focus();
@@ -980,7 +1018,7 @@
           drawTotal();
         }, '새 물품으로 등록', (n) => {
           const info = itemInfo(n);
-          return info && info.lastPrice ? ` <span class="muted small">· 최근 ${won(info.lastPrice)}${info.unit ? '/' + esc(info.unit) : ''}</span>` : '';
+          return info && info.lastPrice ? ` <span class="muted small">· 최근 ${won(info.lastPrice)}${info.unit ? '/' + esc(info.unit) : ''}${info.vat ? ' · 부가세 ' + esc(info.vat) : ''}</span>` : '';
         });
       });
       drawTotal();
@@ -992,7 +1030,13 @@
       if (e.target.classList.contains('it-qty')) it.qty = e.target.value;
       if (e.target.classList.contains('it-unit')) it.unit = e.target.value;
       if (e.target.classList.contains('it-price')) it.price = e.target.value;
+      if (e.target.classList.contains('it-vatmode')) it.vat = e.target.value;
       drawTotal();
+    });
+    $('#itemRows').addEventListener('change', (e) => {
+      if (!e.target.classList.contains('it-vatmode')) return;
+      rows[+e.target.closest('.item-row').dataset.i].vat = e.target.value;
+      dirty = true; drawTotal();
     });
     $('#itemRows').addEventListener('click', (e) => {
       const x = e.target.closest('.it-x'); if (!x) return;
@@ -1044,7 +1088,7 @@
       if (!f.date.value) { toast('날짜를 선택하세요', true); f.date.focus(); return; }
       if (!buy && !site) { toast('현장명을 입력하세요', true); siteIn.focus(); return; }
       const items = rows.map((it) => ({
-        name: it.name.replace(/\s+/g, ' ').trim(), qty: num(it.qty) || 1, unit: it.unit.trim(), price: num(it.price),
+        name: it.name.replace(/\s+/g, ' ').trim(), qty: num(it.qty) || 1, unit: it.unit.trim(), price: num(it.price), vat: it.vat || '',
       })).filter((it) => it.name);
       if (buy && !items.length) { toast('물품을 하나 이상 입력하세요', true); $('#itemRows .it-name').focus(); return; }
       const rec = buy
@@ -1131,7 +1175,7 @@
         <section class="panel">
           <h3 style="margin-top:0">물품 <span class="muted small">${S.items.length}개 · 삭제해도 기존 구매 기록은 남습니다</span></h3>
           <div class="mgr-list">${S.items.map((it) => `<div class="mgr-row">
-            <span class="name">${esc(it.name)} <span class="muted small">${[it.unit, it.lastPrice ? '최근 ' + won(it.lastPrice) : ''].filter(Boolean).map(esc).join(' · ')}</span></span>
+            <span class="name">${esc(it.name)} <span class="muted small">${[it.unit, it.lastPrice ? '최근 ' + won(it.lastPrice) : '', it.vat ? '부가세 ' + it.vat : ''].filter(Boolean).map(esc).join(' · ')}</span></span>
             <button class="btn sm" data-act="renameItem" data-v="${esc(it.name)}">이름 변경</button>
             <button class="btn sm danger" data-act="delItem" data-v="${esc(it.name)}">삭제</button></div>`).join('') || '<p class="muted">없음 · 구매 기록에서 새 물품을 등록하면 여기에 쌓입니다</p>'}</div>
         </section>

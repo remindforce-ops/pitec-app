@@ -289,13 +289,22 @@ main { padding: 14px 16px calc(var(--nav-h) + 28px + env(safe-area-inset-bottom,
 .item-top { display: flex; gap: 6px; align-items: flex-start; }
 .item-top .combo { flex: 1; min-width: 0; }
 .it-x { flex: none; width: 40px; height: 42px; border: 1px solid var(--field); border-radius: 8px; background: #fff; color: var(--muted); font-size: 20px; cursor: pointer; }
-.item-nums { display: grid; grid-template-columns: 1fr 0.8fr 1.3fr 1.3fr; gap: 6px; margin-top: 8px; align-items: end; }
+.item-nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 6px; margin-top: 8px; align-items: end; }
+.item-nums .amt { grid-column: 1 / -1; flex-direction: row !important; justify-content: space-between; align-items: baseline; border-top: 1px dashed var(--line); padding-top: 6px; }
+@media (min-width: 700px) {
+  .item-nums { grid-template-columns: 0.8fr 0.7fr 1.1fr 1.1fr 1fr 1fr 1.1fr; }
+  .item-nums .amt { grid-column: auto; flex-direction: column !important; border-top: 0; padding-top: 0; }
+}
+.item-nums select { padding: 8px 4px; font-size: 15px; }
+.item-nums .calc b { font-size: 15px; color: var(--text); padding: 8px 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .form .item-nums label.mini, .item-nums .mini { margin: 0; gap: 3px; font-size: 12px; font-weight: 400; color: var(--muted); display: flex; flex-direction: column; min-width: 0; }
 .item-nums input { padding: 8px; }
 .item-nums .amt b { font-size: 15px; color: var(--text); padding: 8px 0; text-align: right; white-space: nowrap; }
 .item-nums .amt span { text-align: right; }
 .add-item { align-self: flex-start; margin-top: 8px; }
-.items-total { display: flex; justify-content: space-between; align-items: baseline; border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; font-weight: 600; }
+.items-total { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 8px; display: flex; flex-direction: column; gap: 2px; font-variant-numeric: tabular-nums; }
+.items-total > div { display: flex; justify-content: space-between; align-items: baseline; color: var(--text2); font-size: 14px; }
+.items-total .grand { font-weight: 600; color: var(--text); font-size: 15px; margin-top: 2px; }
 .items-total b { font-size: 18px; color: var(--bu); }
 .items-tbl .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .items-tbl tfoot td { font-weight: 700; border-top: 1px solid var(--line); border-bottom: 0; }
